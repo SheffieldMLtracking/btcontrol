@@ -1,0 +1,146 @@
+#!/usr/bin/env python
+
+import argparse
+import socket
+import nmap
+import pickle
+import requests
+import sys
+import os
+from pathlib import Path
+
+class Box:
+    def __init__(self, addr, scandetails = None):
+        """
+        addr: IP address
+        scandetails: details from nmap scan
+        """
+        self.addr = addr
+        self.scandetails = scandetails
+        self.us = False #is this our own IP address
+        self.p22 = self.scandetails['tcp'][22]['state']
+        self.p5000 = self.scandetails['tcp'][5000]['state']
+        self.beebox = (self.p22=='open') and (self.p5000=='open')
+        self.lastsuccess = None
+        if self.beebox:
+            self.getid()
+        
+        
+    def callapi(self,endpointcall):
+        api_url = "http://%s:5000/%s" % (self.addr, endpointcall)
+        print(api_url)
+        try:
+            response = requests.get(api_url)
+        except requests.exceptions.ConnectionError:
+            print("Failed to connect (%s)" % api_url)
+            return None
+        try:
+            response = response.json()
+        except requests.exceptions.JSONDecodeError:
+            pass        
+        return response
+
+    def getid(self):
+        self.id = self.callapi('getid')
+        
+    def display(self):
+        notes = ""
+        notes+="this computer" if self.us else ""
+        notes+="Box %s" % self.id if self.beebox else ""
+        status = ""
+        if self.lastsuccess==True: status+=" ok "
+        if self.lastsuccess==False: status+=" error "
+        if self.lastsuccess==None: status+=" - "
+        link = "http://%s:8000" % self.addr if self.beebox else self.addr
+        print("%30s | %7s | %7s | %15s | %s" % (link,self.p22,self.p5000,notes,status))
+        
+    def start(self):
+        if not self.beebox: return
+        res = self.callapi('start')
+        self.lastsuccess = (res.content==b'Collection Started')
+        
+    def stop(self):
+        if not self.beebox: return
+        res = self.callapi('stop')
+        self.lastsuccess = (res.content==b'Collection Stopped')
+            
+    def rsync(self,pwfile,savepath):
+        if not self.beebox: return
+        os.system('rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:/home/pi/beephotos %s -a' % (pwfile,self.addr,savepath))
+        
+def get_ip():
+    """
+    Returns the IP address of the adaptor that would route to
+    an internet IP address.    
+    from https://stackoverflow.com/a/60656570/8970017
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        ipaddr = s.getsockname()[0]
+    except:
+        ipaddr = '127.0.0.1'
+    finally:
+        s.close()
+    return ipaddr
+
+def scan_our_subnet(ouripaddr):
+    """
+    Scans x.x.x.* looking for port 5000 open
+    """
+    nm = nmap.PortScanner()
+    searchips = '.'.join((ipaddr.split('.')[:3]+['*']))
+    nm.scan(searchips,'22,5000',arguments='-T5')
+    boxes = []
+    for addr, details in nm.analyse_nmap_xml_scan()['scan'].items():
+        box = Box(addr, details)
+        if ouripaddr==addr: box.us = True
+        boxes.append(box)
+        
+    return boxes  
+        
+
+parser = argparse.ArgumentParser(description='Controls multiple tracking systems.')
+parser.add_argument('--scan',help='Refresh the scan cache',action="store_true")
+parser.add_argument('--start',help='Start all boxes',action="store_true")
+parser.add_argument('--stop',help='Start all boxes',action="store_true")
+parser.add_argument('--rsync',help='Copy all photos from box to local computer',type=str,required=False)
+parser.add_argument('--pwfile',help='Path to file containing ssh password',type=str,required=False)
+
+args = parser.parse_args()
+
+ipaddr = get_ip()
+if args.scan:  
+    print("Rescanning...\n")  
+    boxes = scan_our_subnet(ipaddr)            
+    pickle.dump(boxes,open('cached_boxes.pkl','wb'))
+else:
+    try:
+        boxes = pickle.load(open('cached_boxes.pkl','rb'))
+    except:
+        print("Cache not found, need to scan. Use --scan")
+        sys.exit(1)
+    
+if args.start:
+    for box in boxes:
+        box.start()
+
+if args.stop:
+    for box in boxes:
+        box.stop()        
+        
+
+
+if args.rsync is not None:
+    Path(args.rsync).mkdir(parents=True, exist_ok=True)
+    for box in boxes:
+        box.rsync(args.pwfile,args.rsync)        
+    
+print("Our IP address: %s" % ipaddr)
+print("")
+print("                 IP Address    | Port 22 | Port 5k | Comments        | Last Command")
+for box in boxes:    
+    box.display()
+    
+   
