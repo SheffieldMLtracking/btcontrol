@@ -1,6 +1,11 @@
 # btcontrol
 A tool for controlling multiple tracking systems, rsyncing the data off them, etc.
 
+# install 
+```
+pip install git+https://github.com/SheffieldMLtracking/btcontrol.git
+```
+
 # Examples
 First need to get a list of all the systems on the network:
 ```
