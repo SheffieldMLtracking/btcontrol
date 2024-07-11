@@ -33,7 +33,7 @@ btcontrol --stop
 ```
 
 # Usage
-
+```
 usage: btcontrol [-h] [--scan] [--start] [--stop] [--rsync RSYNC] [--pwfile PWFILE]
 
 Controls multiple tracking systems.
@@ -45,3 +45,4 @@ options:
   --stop           Start all boxes
   --rsync RSYNC    Copy all photos from box to local computer
   --pwfile PWFILE  Path to file containing ssh password
+```
