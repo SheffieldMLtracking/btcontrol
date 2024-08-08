@@ -26,9 +26,10 @@ class Box:
             self.getid()
         
         
-    def callapi(self,endpointcall):
+    def callapi(self,endpointcall,printcall=False):
+        if printcall: print(endpointcall)
         api_url = "http://%s:5000/%s" % (self.addr, endpointcall)
-        print(api_url)
+        #print(api_url)
         try:
             response = requests.get(api_url)
         except requests.exceptions.ConnectionError:
@@ -38,10 +39,14 @@ class Box:
             response = response.json()
         except requests.exceptions.JSONDecodeError:
             pass        
-        return response
+        return str(response)
 
     def getid(self):
-        self.id = self.callapi('getid')
+        id = self.callapi('getid')
+        if id!='<Response [404]>':
+            self.id = id
+        else:
+            self.beebox = False
         
     def display(self):
         notes = ""
@@ -57,17 +62,62 @@ class Box:
     def start(self):
         if not self.beebox: return
         res = self.callapi('start')
-        self.lastsuccess = (res.content==b'Collection Started')
+        if hasattr(res,'content'):
+          self.lastsuccess = (res.content==b'Collection Started')
         
     def stop(self):
         if not self.beebox: return
         res = self.callapi('stop')
-        self.lastsuccess = (res.content==b'Collection Stopped')
-            
-    def rsync(self,pwfile,savepath):
+        if hasattr(res,'content'):
+          self.lastsuccess = (res.content==b'Collection Stopped')
+
+    def reboot(self):
         if not self.beebox: return
-        os.system('rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:/home/pi/beephotos %s -a' % (pwfile,self.addr,savepath))
+        res = self.callapi('reboot')
+             
+    def sessionset(self,sessionid,setid):
+        if not self.beebox: return
+        self.callapi('setlabel/a%s,%s' % (sessionid,setid))
         
+    def configure(self, purpose, ds=0,interval=0.5):
+        """Configure the exposure etc to either calibration or experiment mode"""
+        if not self.beebox: return
+        if purpose == 'cal':
+            exposure = 9000
+            predelay = 165
+            interval = 5
+            delay = 100
+        if purpose == 'exp':
+            exposure = 90
+            predelay = 165
+            delay = 100
+            interval = interval
+        print("   configuring box %s" % self.id)
+        res = self.callapi('config/exposure/%d' % exposure,True)
+        res = self.callapi('config/predelay/%d' % predelay,True)
+        res = self.callapi('config/delay/%d' % delay,True)
+        res = self.callapi('set/trigger/skipnoflashes/5000',True)
+        res = self.callapi('set/trigger/t/%0.2f' % interval,True)
+        res = self.callapi('set/trigger/ds/%0.2f' % ds,True)
+        res = self.callapi('set/trigger/flashseq/1',True)
+        
+        
+        if hasattr(res,'content'):
+          self.lastsuccess = (res.content==b'...') #just check last one... not sure if it's really done, but hopefully.
+        
+    def rsync(self,pwfile,savepath,downloadrestriction=''):
+        if not self.beebox: return        
+        print("Downloading from box %s" % self.id)
+        sourcepath = '/home/pi/beephotos'
+        if len(downloadrestriction)>0:
+            sourcepath = sourcepath+'/'+downloadrestriction+'/*'
+            savepath = savepath + '/'+downloadrestriction
+
+        cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
+        print("Running:\n%s\n" % cmd)
+        
+        os.system(cmd)
+    
 def get_ip():
     """
     Returns the IP address of the adaptor that would route to
@@ -85,58 +135,143 @@ def get_ip():
         s.close()
     return ipaddr
 
-def scan_our_subnet(ouripaddr):
+def scan_our_subnet(ouripaddr,boxes = []):
     """
     Scans x.x.x.* looking for port 5000 open
+    
+    Pass it a previous list to add to, if new items found
     """
     nm = nmap.PortScanner()
     searchips = '.'.join((ipaddr.split('.')[:3]+['*']))
     nm.scan(searchips,'22,5000',arguments='-T5')
-    boxes = []
     for addr, details in nm.analyse_nmap_xml_scan()['scan'].items():
+        if addr in [box.addr for box in boxes]: 
+            continue
         box = Box(addr, details)
         if ouripaddr==addr: box.us = True
         boxes.append(box)
-        
-    return boxes  
+    return boxes
         
 
 parser = argparse.ArgumentParser(description='Controls multiple tracking systems.')
 parser.add_argument('--scan',help='Refresh the scan cache',action="store_true")
+parser.add_argument('--calconfig',help='Configure exposure, firing rate etc ready for calibration mode',action="store_true")
+parser.add_argument('--expconfig',help='Configure exposure, firing rate etc ready for experiment mode',action="store_true")
+parser.add_argument('--session',help='Set the session id',type=str,required=False)
+parser.add_argument('--set',help='Set the set id',type=str,required=False)
 parser.add_argument('--start',help='Start all boxes',action="store_true")
 parser.add_argument('--stop',help='Start all boxes',action="store_true")
-parser.add_argument('--rsync',help='Copy all photos from box to local computer',type=str,required=False)
-parser.add_argument('--pwfile',help='Path to file containing ssh password',type=str,required=False)
-
+parser.add_argument('--interval',help='Interval in seconds',type=float,required=False)
+parser.add_argument('--rsynclocal',help='Location of local destination of rsync, e.g. btcontrol --rsynclocal ~/Documents/beedata',type=str,required=False)
+parser.add_argument('--rsync',help='Copy all photos from box to local computer. e.g. btcontrol --rsync --pwfile ~/Documents/Research/rsync_bee/pw.txt',type=str,required=False,nargs='?')
+parser.add_argument('--pwfile',help='Configure the path and file containing ssh password.',type=str,required=False)
+parser.add_argument('--reboot',help='Reboot the pi',action="store_true")
 args = parser.parse_args()
 
+configpath = os.path.expanduser('~')+'/.btcontrol/'
+os.makedirs(configpath,exist_ok=True)
+
+if args.interval:
+    interval = args.interval
+else:
+    interval = 0.5
+        
 ipaddr = get_ip()
-if args.scan:  
-    print("Rescanning...\n")  
-    boxes = scan_our_subnet(ipaddr)            
-    pickle.dump(boxes,open('cached_boxes.pkl','wb'))
+if args.scan: 
+    boxes = []
+    for i in range(3):
+        print("Rescanning... %d/3\n" % (i+1))
+        boxes = scan_our_subnet(ipaddr,boxes)
+    pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
 else:
     try:
-        boxes = pickle.load(open('cached_boxes.pkl','rb'))
+        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
     except:
         print("Cache not found, need to scan. Use --scan")
         sys.exit(1)
+
+if args.session is not None:
+    print("Setting new session id: %s" % args.session)
+    sessionid = args.session
+else:
+    try:
+        sessionid = pickle.load(open(configpath+'cached_sessionid.pkl','rb'))
+    except:
+        print("WARNING: NO SESSION ID SET, use --session IDOFSESSION")
+        sessionid = "unnamed_session"
+  
+if args.pwfile is not None:
+    print("Password file: %s" % args.pwfile)
+    pwfile = args.pwfile
+else:
+    try:
+        pwfile = pickle.load(open(configpath+'cached_pwfile.pkl','rb'))
+    except:
+        pwfile = None
+pickle.dump(pwfile,open(configpath+'cached_pwfile.pkl','wb'))    
+      
+if args.rsynclocal is not None:
+    print("Local destination: %s" % args.rsynclocal)
+    rsynclocal = args.rsynclocal
+else:
+    try:
+        rsynclocal = pickle.load(open(configpath+'cached_rsynclocal.pkl','rb'))
+    except:
+        rsynclocal = "."        
+pickle.dump(rsynclocal,open(configpath+'cached_rsynclocal.pkl','wb'))    
+
+if args.set is not None:
+    print("Setting new set id: %s" % args.set)
+    setid = args.set
+else:
+    try:
+        setid = pickle.load(open(configpath+'cached_setid.pkl','rb'))
+    except:
+        print("WARNING: NO SET ID SET, use --set IDOFSET")
+        setid = "unnamed_session"
     
-if args.start:
-    for box in boxes:
-        box.start()
+print("SESSION: %s" % sessionid)
+print("SET: %s" % setid)
 
 if args.stop:
     for box in boxes:
-        box.stop()        
+        box.stop()     
         
+if args.reboot:
+    for box in boxes:
+        box.reboot()     
 
+if args.calconfig:
+    print("Reminder: Setting set to 'cal'")
+    setid = 'cal'
+    for box in boxes:
+        box.configure('cal')
+        
+if args.expconfig:  
+    beeboxes = [box for box in boxes if box.beebox]  
+    for i,box in enumerate(beeboxes):
+        box.configure('exp',i/len(beeboxes),interval)
+        
+for box in boxes:
+    box.sessionset(sessionid,setid)
+
+
+        
+if args.start:
+    for box in boxes:
+        box.start()
+   
+       
 
 if args.rsync is not None:
-    Path(args.rsync).mkdir(parents=True, exist_ok=True)
+    os.makedirs(rsynclocal,exist_ok=True)
     for box in boxes:
-        box.rsync(args.pwfile,args.rsync)        
-    
+        box.rsync(pwfile,rsynclocal,args.rsync)        
+   
+pickle.dump(sessionid,open(configpath+'cached_sessionid.pkl','wb'))    
+pickle.dump(setid,open(configpath+'cached_setid.pkl','wb'))    
+
+ 
 print("Our IP address: %s" % ipaddr)
 print("")
 print("                 IP Address    | Port 22 | Port 5k | Comments        | Last Command")
