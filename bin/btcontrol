@@ -83,7 +83,7 @@ class Box:
         """Configure the exposure etc to either calibration or experiment mode"""
         if not self.beebox: return
         if purpose == 'cal':
-            exposure = 9000
+            exposure = 1000
             predelay = 165
             interval = 5
             delay = 100
