@@ -37,7 +37,7 @@ class Box:
             return None
         try:
             response = response.json()
-        except requests.exceptions.JSONDecodeError:
+        except: #removed "requests.exceptions.JSONDecodeError:" #simplejson.errors.JSONDecodeError can also be the exception. Might be to do with https://github.com/psf/requests/issues/4842
             pass        
         return str(response)
 
