@@ -276,7 +276,7 @@ print("Our IP address: %s" % ipaddr)
 print("")
 print("                 IP Address    | Port 22 | Port 5k | Comments        | Last Command")
 for box in boxes:    
-    #if not box.beebox: continue
+    #if not box.beebox: continue #only will show bee boxes.
     box.display()
     
    
