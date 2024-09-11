@@ -2,7 +2,7 @@ from distutils.core import setup
 setup(
   name = 'btcontrol',
   packages = ['btcontrol'],
-  version = '0.1',
+  version = '0.2',
   description = 'Tool for controlling the tracking systems.',
   author = 'Mike Smith',
   author_email = 'm.t.smith@sheffield.ac.uk',
