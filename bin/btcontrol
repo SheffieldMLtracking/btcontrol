@@ -8,18 +8,23 @@ import requests
 import sys
 import os
 from pathlib import Path
+import json
+import csv
 
 class Box:
-    def __init__(self, addr, scandetails = None):
+    def __init__(self, addr, sshport, apiport, webport, scandetails = None):
         """
         addr: IP address
         scandetails: details from nmap scan
         """
         self.addr = addr
+        self.sshport = sshport #Port no for SSH (=22 for boxes on local subnet, but unique to each box for SSH connections). NB I'm not sure if we actually use this at all, but I've included it for completeness
+        self.apiport = apiport #Port no for API (=5000 for boxes on local subnet, but unique to each box for SSH connections)
+        self.webport = webport #Port no for web interface (=8000 for boxes on local subnet, but unique to each box for SSH connections)
         self.scandetails = scandetails
-        self.us = False #is this our own IP address
-        self.p22 = self.scandetails['tcp'][22]['state']
-        self.p5000 = self.scandetails['tcp'][5000]['state']
+        self.us = False #is this our own IP address. QUESTION: this property is to differentiate between our computer and boxes on the network. Now we're adding boxes that ssh to local ports, so in that case the IP address IS our own IP address. However, it looks as though we're setting this False, here. I can't figure out where the check occurs as to whether or not the found item is a box or us?
+        self.p22 = self.scandetails['tcp'][sshport]['state']
+        self.p5000 = self.scandetails['tcp'][apiport]['state']
         self.beebox = (self.p22=='open') and (self.p5000=='open')
         self.lastsuccess = None
         if self.beebox:
@@ -28,7 +33,7 @@ class Box:
         
     def callapi(self,endpointcall,printcall=False):
         if printcall: print(endpointcall)
-        api_url = "http://%s:5000/%s" % (self.addr, endpointcall)
+        api_url = "http://%s:%d/%s" % (self.addr, self.apiport, endpointcall)
         #print(api_url)
         try:
             response = requests.get(api_url)
@@ -56,7 +61,7 @@ class Box:
         if self.lastsuccess==True: status+=" ok "
         if self.lastsuccess==False: status+=" error "
         if self.lastsuccess==None: status+=" - "
-        link = "http://%s:8000" % self.addr if self.beebox else self.addr
+        link = "http://%s:%d" % (self.addr, self.webport) if self.beebox else self.addr #This was meant to correct the link to the web interface for SSH boxes by correcting the port number, but of course it doesn't.
         print("%30s | %7s | %7s | %15s | %s" % (link,self.p22,self.p5000,notes,status))
         
     def start(self):
@@ -147,14 +152,31 @@ def scan_our_subnet(ouripaddr,boxes = []):
     for addr, details in nm.analyse_nmap_xml_scan()['scan'].items():
         if addr in [box.addr for box in boxes]: 
             continue
-        box = Box(addr, details)
+        box = Box(addr, 22, 5000, 8000, details)
         if ouripaddr==addr: box.us = True
         boxes.append(box)
     return boxes
         
+def addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes = []):
+    """
+    Looks at a list of ports on localhost for bee boxes
+    Pass it a previous list to add to, if new items found
+    """
+    nm = nmap.PortScanner()
+    for sshport, apiport, webport in zip(listofsshports,listofAPIports,listofwebinterfaceports):
+        if apiport in [box.apiport for box in boxes]: #I think this checks that the box is not already in our list so we don't add the same box again? Checks port number rather than IP address because all boxes using SSH connection are on localhost.
+            continue
+        checkports = "%d,%d,%d" % (sshport, apiport, webport)   
+        nm.scan('127.0.0.1',checkports,arguments='-T5') #Checks whether ports are open, so we can only work with boxes that have an SSH connection to our AWS server
+        details=nm.analyse_nmap_xml_scan()['scan']['127.0.0.1']
+        box = Box('127.0.0.1', sshport, apiport, webport, details)
+        boxes.append(box)
+    return boxes
+
 
 parser = argparse.ArgumentParser(description='Controls multiple tracking systems.')
 parser.add_argument('--scan',help='Refresh the scan cache',action="store_true")
+parser.add_argument('--scanports',help='Add boxes that connect via ssh to local ports, by scanning a list of port numbers at the provided directory address', type=str,required=False)
 parser.add_argument('--calconfig',help='Configure exposure, firing rate etc ready for calibration mode',action="store_true")
 parser.add_argument('--expconfig',help='Configure exposure, firing rate etc ready for experiment mode',action="store_true")
 parser.add_argument('--session',help='Set the session id',type=str,required=False)
@@ -188,6 +210,46 @@ else:
         boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
     except:
         print("Cache not found, need to scan. Use --scan")
+        sys.exit(1)
+
+if args.scanports is not None:
+    boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
+    scanports=args.scanports
+    listofboxes=[]
+    listofsshports=[]
+    listofAPIports=[]
+    listofwebinterfaceports=[]
+    if scanports[-4:] == '.txt' or scanports[-4:] == '.csv':
+        with open(scanports, newline='') as csvfile:
+            portlist = csv.reader(csvfile, delimiter=',', quotechar='|')
+            for row in portlist:
+                if len(row)==1:
+                    listofboxes.append(int(row[0]))
+                    boxlistflag=1
+                elif len(row)==3:
+                    listofsshports.append(int(row[0]))
+                    listofAPIports.append(int(row[1]))
+                    listofwebinterfaceports.append(int(row[2]))
+                else:
+                    print('Cannot parse this file, should be n*1 or n*3 list with one row per box')
+                    continue
+    else:
+        try:
+            listofboxes=json.loads(scanports) #We can directly type a list of boxes in format '[box1,box2,box3]' instead of passing a text file
+        except:
+            print('Cannot parse this input. Please enter a filepath or comma-separated list of boxes in square brackets')
+    if listofboxes and not listofAPIports: #If we just have a n*1 list we inbterpret them as box names and use my default naming pattern to guess the port numbers
+        for thisbox in listofboxes:
+            listofsshports.append(thisbox+4000)
+            listofAPIports.append(thisbox+5000)
+            listofwebinterfaceports.append(thisbox+7000)
+    boxes =  addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes)  
+    pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
+else: #QUESTION: 'Im following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
+    try:
+        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+    except:
+        print("Cache not found, need list of boxes. Use --scanports FILE_WITH_PORT_LIST")
         sys.exit(1)
 
 if args.session is not None:
@@ -263,7 +325,7 @@ if args.start:
    
        
 
-if args.rsync is not None:
+if args.rsync is not None: #QUESTION: I don't think rsync will currently work with boxes connecting via local ports, because it tries to SSH to each Pi's IP address. I can figure out how to do it across the SSH tunnel instead, but is it worth doing? If we are controlling boxes using AWS then we will also be backing up the data using Joe H's pipeline and won't need to rsync
     os.makedirs(rsynclocal,exist_ok=True)
     for box in boxes:
         box.rsync(pwfile,rsynclocal,args.rsync)        
@@ -278,5 +340,3 @@ print("                 IP Address    | Port 22 | Port 5k | Comments        | La
 for box in boxes:    
     #if not box.beebox: continue #only will show bee boxes.
     box.display()
-    
-   
