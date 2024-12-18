@@ -173,6 +173,41 @@ def addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceport
         boxes.append(box)
     return boxes
 
+def filenametoportlist(inputname):
+    """
+    Takes a string input and tries to parse it as a directory address to a csv or txt file
+    containing a list of ports to try, or as a list of box names from which it tries to reconstruct the port list.
+    """
+    listofboxes=[]
+    listofsshports=[]
+    listofAPIports=[]
+    listofwebinterfaceports=[]
+    if inputname[-4:] == '.txt' or inputname[-4:] == '.csv':
+        with open(inputname, newline='') as csvfile:
+            portlist = csv.reader(csvfile, delimiter=',', quotechar='|')
+            for row in portlist:
+                if len(row)==1:
+                    listofboxes.append(int(row[0]))
+                    boxlistflag=1
+                elif len(row)==3:
+                    listofsshports.append(int(row[0]))
+                    listofAPIports.append(int(row[1]))
+                    listofwebinterfaceports.append(int(row[2]))
+                else:
+                    print('Cannot parse this file, should be n*1 or n*3 list with one row per box')
+                    continue
+    else:
+        try:
+            listofboxes=json.loads(inputname) #We can directly type a list of boxes in format '[box1,box2,box3]' instead of passing a text file
+        except:
+            print('Cannot parse this input. Please enter a filepath or comma-separated list of boxes in square brackets')
+    if listofboxes and not listofAPIports: #If we just have a n*1 list we interpret them as box names and use my default naming pattern to guess the port numbers
+        for thisbox in listofboxes:
+            listofsshports.append(thisbox+4000)
+            listofAPIports.append(thisbox+5000)
+            listofwebinterfaceports.append(thisbox+7000)
+    return listofsshports, listofAPIports, listofwebinterfaceports
+
 
 parser = argparse.ArgumentParser(description='Controls multiple tracking systems.')
 parser.add_argument('--scan',help='Refresh the scan cache',action="store_true")
@@ -214,38 +249,10 @@ else:
 
 if args.scanports is not None:
     boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
-    scanports=args.scanports
-    listofboxes=[]
-    listofsshports=[]
-    listofAPIports=[]
-    listofwebinterfaceports=[]
-    if scanports[-4:] == '.txt' or scanports[-4:] == '.csv':
-        with open(scanports, newline='') as csvfile:
-            portlist = csv.reader(csvfile, delimiter=',', quotechar='|')
-            for row in portlist:
-                if len(row)==1:
-                    listofboxes.append(int(row[0]))
-                    boxlistflag=1
-                elif len(row)==3:
-                    listofsshports.append(int(row[0]))
-                    listofAPIports.append(int(row[1]))
-                    listofwebinterfaceports.append(int(row[2]))
-                else:
-                    print('Cannot parse this file, should be n*1 or n*3 list with one row per box')
-                    continue
-    else:
-        try:
-            listofboxes=json.loads(scanports) #We can directly type a list of boxes in format '[box1,box2,box3]' instead of passing a text file
-        except:
-            print('Cannot parse this input. Please enter a filepath or comma-separated list of boxes in square brackets')
-    if listofboxes and not listofAPIports: #If we just have a n*1 list we inbterpret them as box names and use my default naming pattern to guess the port numbers
-        for thisbox in listofboxes:
-            listofsshports.append(thisbox+4000)
-            listofAPIports.append(thisbox+5000)
-            listofwebinterfaceports.append(thisbox+7000)
+    listofsshports, listofAPIports, listofwebinterfaceports = filenametoportlist(args.scanports)
     boxes =  addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes)  
     pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
-else: #QUESTION: 'Im following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
+else: #QUESTION: I'm following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
     try:
         boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
     except:
