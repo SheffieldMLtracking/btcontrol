@@ -232,6 +232,16 @@ if args.interval:
     interval = args.interval
 else:
     interval = 0.5
+
+#Now that there are 2 ways to generate a box list, it's inelegant to deal with a lack of input under each relevant arg, 
+#because we'll generate 2 different messages (and will call sys.exit even though the other arg provides the necessary info to generate a new box list).
+#Instead we check whether there's a box list here and return a single error message if not.
+if not args.scan and not args.scanports:
+    try:
+        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+    except:
+        print("No boxes specified. Use --scan OR --scanports OR --openports")
+        sys.exit(1)
         
 ipaddr = get_ip()
 if args.scan: 
@@ -240,24 +250,24 @@ if args.scan:
         print("Rescanning... %d/3\n" % (i+1))
         boxes = scan_our_subnet(ipaddr,boxes)
     pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
-else:
-    try:
-        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
-    except:
-        print("Cache not found, need to scan. Use --scan")
-        sys.exit(1)
+#else:
+#    try:
+#        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+#    except:
+#        print("Cache not found, need to scan. Use --scan")
+#        sys.exit(1)
 
 if args.scanports is not None:
     boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
     listofsshports, listofAPIports, listofwebinterfaceports = filenametoportlist(args.scanports)
     boxes =  addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes)  
     pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
-else: #QUESTION: I'm following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
-    try:
-        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
-    except:
-        print("Cache not found, need list of boxes. Use --scanports FILE_WITH_PORT_LIST")
-        sys.exit(1)
+#else: #QUESTION: I'm following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
+#    try:
+#        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+#    except:
+#        print("Cache not found, need list of boxes. Use --scanports FILE_WITH_PORT_LIST")
+#        sys.exit(1)
 
 if args.session is not None:
     print("Setting new session id: %s" % args.session)
