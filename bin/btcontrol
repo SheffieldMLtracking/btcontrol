@@ -12,6 +12,7 @@ import json
 import csv
 import subprocess
 from time import sleep
+import psutil
 
 class Box:
     def __init__(self, addr, sshport, apiport, webport, scandetails = None):
@@ -219,8 +220,8 @@ def openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,l
         #print(goodbox) # 
         if goodbox==1:
             print("Port %s: opened successfully" % apiport)
-            #openportlist.append(openapi.pid)#save process id for each open port OR:
-            openportlist.append(apiport)#save port no for each open port
+            openportlist.append(openapi.pid)#save process id for each open port OR:
+            #openportlist.append(apiport)#save port no for each open port
             for thisport in [sshport, webport]:
                         portstring= '%d:localhost:%d' % (thisport, thisport)
                         openport = subprocess.Popen(['ssh', '-N', '-L', portstring, serveraddress, '-i', serverpw],
@@ -229,8 +230,8 @@ def openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,l
                                              stderr=subprocess.PIPE,
                                              universal_newlines=True,
                                              bufsize=0)
-                        #openportlist.append(openport.pid)#save process id for each open port OR:
-                        openportlist.append(thisport)#save port no for each open port
+                        openportlist.append(openport.pid)#save process id for each open port OR:
+                        #openportlist.append(thisport)#save port no for each open port
         elif goodbox==0:
             print("Port %s: no reponse" % apiport)
             openapi.kill()
@@ -466,22 +467,23 @@ if args.rsync is not None: #QUESTION: I don't think rsync will currently work wi
         box.rsync(pwfile,rsynclocal,args.rsync)        
 
 if args.closeports:
-    pass
-#    if not openportlist:
-#        try:
-#            openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
-#        except:
-#            print("No open ports found")
-#            continue
-#    for openport in openportlist:
-#        try:
-#            openport.kill()
-#    #        print('super')
-#        except:
-#    #        print('ooper!')
-#            pass
-#    openportlist=[]
-#    pickle.dump(openportlist,open(configpath+'cached_ports.pkl','wb'))
+    if not openportlist:
+        try:
+            openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
+        except:
+            print("No open ports found")
+    for thisport in openportlist:
+        try:
+            proc=psutil.Process(thisport)
+        except:
+            pass
+        else:
+            try:
+                proc.kill()
+            except:
+                pass
+    openportlist=[]
+    pickle.dump(openportlist,open(configpath+'cached_ports.pkl','wb'))
 
 pickle.dump(sessionid,open(configpath+'cached_sessionid.pkl','wb'))    
 pickle.dump(setid,open(configpath+'cached_setid.pkl','wb'))    
@@ -493,4 +495,3 @@ print("                 IP Address    | Port 22 | Port 5k | Comments        | La
 for box in boxes:    
     #if not box.beebox: continue #only will show bee boxes.
     box.display()
-    
