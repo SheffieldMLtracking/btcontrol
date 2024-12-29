@@ -1,9 +1,283 @@
+#!/usr/bin/env python
+
+import argparse
+import socket
+import nmap
+import pickle
+import requests
+import sys
+import os
+from pathlib import Path
+import json
+import csv
+import subprocess
+from time import sleep
+
+class Box:
+    def __init__(self, addr, sshport, apiport, webport, scandetails = None):
+        """
+        addr: IP address
+        scandetails: details from nmap scan
+        """
+        self.addr = addr
+        self.sshport = sshport #Port no for SSH (=22 for boxes on local subnet, but unique to each box for SSH connections). NB I'm not sure if we actually use this at all, but I've included it for completeness
+        self.apiport = apiport #Port no for API (=5000 for boxes on local subnet, but unique to each box for SSH connections)
+        self.webport = webport #Port no for web interface (=8000 for boxes on local subnet, but unique to each box for SSH connections)
+        self.scandetails = scandetails
+        self.us = False #is this our own IP address. QUESTION: this property is to differentiate between our computer and boxes on the network. Now we're adding boxes that ssh to local ports, so in that case the IP address IS our own IP address. However, it looks as though we're setting this False, here. I can't figure out where the check occurs as to whether or not the found item is a box or us?
+        self.p22 = self.scandetails['tcp'][sshport]['state']
+        self.p5000 = self.scandetails['tcp'][apiport]['state']
+        self.beebox = (self.p22=='open') and (self.p5000=='open')
+        self.lastsuccess = None
+        if self.beebox:
+            self.getid()
+        
+        
+    def callapi(self,endpointcall,printcall=False):
+        if printcall: print(endpointcall)
+        api_url = "http://%s:%d/%s" % (self.addr, self.apiport, endpointcall)
+        #print(api_url)
+        try:
+            response = requests.get(api_url)
+        except requests.exceptions.ConnectionError:
+            print("Failed to connect (%s)" % api_url)
+            return None
+        try:
+            response = response.json()
+        except: #removed "requests.exceptions.JSONDecodeError:" #simplejson.errors.JSONDecodeError can also be the exception. Might be to do with https://github.com/psf/requests/issues/4842
+            pass        
+        return str(response)
+
+    def getid(self):
+        id = self.callapi('getid')
+        if id!='<Response [404]>':
+            self.id = id
+        else:
+            self.beebox = False
+        
+    def display(self):
+        notes = ""
+        notes+="this computer" if self.us else ""
+        notes+="Box %s" % self.id if self.beebox else ""
+        status = ""
+        if self.lastsuccess==True: status+=" ok "
+        if self.lastsuccess==False: status+=" error "
+        if self.lastsuccess==None: status+=" - "
+        link = "http://%s:%d" % (self.addr, self.webport) if self.beebox else self.addr #This was meant to correct the link to the web interface for SSH boxes by correcting the port number. Should now work for boxes on local network or port forwarding from remote computer BUT won't work if you're controlling boxes from AWS server over shh.
+        print("%30s | %7s | %7s | %15s | %s" % (link,self.p22,self.p5000,notes,status))
+        
+    def start(self):
+        if not self.beebox: return
+        res = self.callapi('start')
+        if hasattr(res,'content'):
+          self.lastsuccess = (res.content==b'Collection Started')
+        
+    def stop(self):
+        if not self.beebox: return
+        res = self.callapi('stop')
+        if hasattr(res,'content'):
+          self.lastsuccess = (res.content==b'Collection Stopped')
+
+    def reboot(self):
+        if not self.beebox: return
+        res = self.callapi('reboot')
+             
+    def sessionset(self,sessionid,setid):
+        if not self.beebox: return
+        self.callapi('setlabel/a%s,%s' % (sessionid,setid))
+        
+    def configure(self, purpose, ds=0,interval=2):
+        """Configure the exposure etc to either calibration or experiment mode"""
+        if not self.beebox: return
+        if purpose == 'cal':
+            exposure = 1000
+            predelay = 165
+            interval = 5
+            delay = 100
+            flashseq = 1
+        if purpose == 'exp':
+            exposure = 90
+            predelay = 165
+            delay = 100
+            flashseq = 1
+            interval = interval
+        if purpose == 'ohio':
+            exposure = 100
+            predelay = 165
+            delay = 100
+            flashseq = 1 #2 at a time
+            interval = interval
+        if purpose == 'noflash':
+            exposure = 150
+            predelay = 165
+            delay = 100
+            flashseq = 9 #No flash
+            interval = interval
+        print("   configuring box %s" % self.id, ":")
+        res = self.callapi('config/exposure/%d' % exposure,True)
+        res = self.callapi('config/predelay/%d' % predelay,True)
+        res = self.callapi('config/delay/%d' % delay,True)
+        res = self.callapi('set/trigger/skipnoflashes/5000',True)
+        res = self.callapi('set/trigger/t/%0.2f' % interval,True)
+        res = self.callapi('set/trigger/ds/%0.2f' % ds,True)
+        res = self.callapi('set/trigger/flashseq/%d' % flashseq,True)
+        print("")
+        
+        if hasattr(res,'content'):
+          self.lastsuccess = (res.content==b'...') #just check last one... not sure if it's really done, but hopefully.
+        
+    def rsync(self,pwfile,savepath,downloadrestriction=''):
+        if not self.beebox: return        
+        print("Downloading from box %s" % self.id)
+        sourcepath = '/home/pi/beephotos'
+        if len(downloadrestriction)>0:
+            sourcepath = sourcepath+'/'+downloadrestriction+'/*'
+            savepath = savepath + '/'+downloadrestriction
+
+        cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
+        print("Running:\n%s\n" % cmd)
+        
+        os.system(cmd)
+    
+def get_ip():
+    """
+    Returns the IP address of the adaptor that would route to
+    an internet IP address.    
+    from https://stackoverflow.com/a/60656570/8970017
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        sshport.kill()
-        print('super')
+        # doesn't even have to be reachable
+        s.connect(('10.255.255.255', 1))
+        ipaddr = s.getsockname()[0]
     except:
-        print('ooper!')
-        pass
+        ipaddr = '127.0.0.1'
+    finally:
+        s.close()
+    return ipaddr
+
+def scan_our_subnet(ouripaddr,boxes = []):
+    """
+    Scans x.x.x.* looking for port 5000 open
+    
+    Pass it a previous list to add to, if new items found
+    """
+    nm = nmap.PortScanner()
+    searchips = '.'.join((ipaddr.split('.')[:3]+['*']))
+    nm.scan(searchips,'22,5000',arguments='-T5')
+    for addr, details in nm.analyse_nmap_xml_scan()['scan'].items():
+        if addr in [box.addr for box in boxes]: 
+            continue
+        box = Box(addr, 22, 5000, 8000, details)
+        if ouripaddr==addr: box.us = True
+        boxes.append(box)
+    return boxes
+        
+def addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes = []):
+    """
+    Looks at a list of ports on localhost for bee boxes
+    Pass it a previous list to add to, if new items found
+    """
+    nm = nmap.PortScanner()
+    for sshport, apiport, webport in zip(listofsshports,listofAPIports,listofwebinterfaceports):
+        if apiport in [box.apiport for box in boxes]: #I think this checks that the box is not already in our list so we don't add the same box again? Checks port number rather than IP address because all boxes using SSH connection are on localhost.
+            continue
+        checkports = "%d,%d,%d" % (sshport, apiport, webport)   
+        nm.scan('127.0.0.1',checkports,arguments='-T5') #Checks whether ports are open, so we can only work with boxes that have an SSH connection to our AWS server
+        details=nm.analyse_nmap_xml_scan()['scan']['127.0.0.1']
+        box = Box('127.0.0.1', sshport, apiport, webport, details)
+        boxes.append(box)
+    return boxes
+
+def openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,listofwebinterfaceports,boxes = [], openportlist=[]):
+    """
+    Opens a list of ports on localhost for forwarding to boxes via AWS server
+    Allows us to control list of boxes from a remote computer
+    Calls addlocalportconnections to add the open ports to our list of boxes
+    Pass it a previous list to add to, if new items found
+    """
+    for sshport, apiport, webport in zip(listofsshports,listofAPIports,listofwebinterfaceports):
+        openapi, openport = [], []
+        portstring= '%d:localhost:%d' % (apiport, apiport)
+        openapi = subprocess.Popen(['ssh', '-N', '-L', portstring, serveraddress, '-i', serverpw],
+                            stdin =subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            universal_newlines=True,
+                            bufsize=0)
+        api_url = "http://%s:%d/%s" % ('127.0.0.1', apiport, 'getid')
+        print("Trying ports:", sshport, apiport, webport)#
+        #print(api_url)#
+        goodbox=2 #If this doesn't get changed, we have a problem
+        try: #Checking for open ports no longer works to determine if box is functioning, since we've just opened the port! Instead, I try an API call and only add box if we get a response from the Pi. Is there a better way to do this?
+            sleep(1)
+            response = requests.get(api_url)
+        except:
+            goodbox=0
+        else:
+            goodbox=1
+        #print(goodbox) # 
+        if goodbox==1:
+            print("Port %s: opened successfully" % apiport)
+            #openportlist.append(openapi.pid)#save process id for each open port OR:
+            openportlist.append(apiport)#save port no for each open port
+            for thisport in [sshport, webport]:
+                        portstring= '%d:localhost:%d' % (thisport, thisport)
+                        openport = subprocess.Popen(['ssh', '-N', '-L', portstring, serveraddress, '-i', serverpw],
+                                             stdin =subprocess.PIPE,
+                                             stdout=subprocess.PIPE,
+                                             stderr=subprocess.PIPE,
+                                             universal_newlines=True,
+                                             bufsize=0)
+                        #openportlist.append(openport.pid)#save process id for each open port OR:
+                        openportlist.append(thisport)#save port no for each open port
+        elif goodbox==0:
+            print("Port %s: no reponse" % apiport)
+            openapi.kill()
+        elif goodbox==2:
+            print("Error in function 'openportconnections': goodbox==2?")
+        else:
+            print("Error: something weird going on in function 'openportconnections'")
+        print("")#
+    boxes=addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes)
+    print("Open ports: ", openportlist) #
+    print('Remember to use "btcontrol --closeports" at the end of your session')
+    return boxes, openportlist
+
+def filenametoportlist(inputname):
+    """
+    Takes a string input and tries to parse it as a directory address to a csv or txt file
+    containing a list of ports to try, or as a list of box names from which it tries to reconstruct the port list.
+    """
+    listofboxes=[]
+    listofsshports=[]
+    listofAPIports=[]
+    listofwebinterfaceports=[]
+    if inputname[-4:] == '.txt' or inputname[-4:] == '.csv':
+        with open(inputname, newline='') as csvfile:
+            portlist = csv.reader(csvfile, delimiter=',', quotechar='|')
+            for row in portlist:
+                if len(row)==1:
+                    listofboxes.append(int(row[0]))
+                    boxlistflag=1
+                elif len(row)==3:
+                    listofsshports.append(int(row[0]))
+                    listofAPIports.append(int(row[1]))
+                    listofwebinterfaceports.append(int(row[2]))
+                else:
+                    print('Cannot parse this file, should be n*1 or n*3 list with one row per box')
+                    continue
+    else:
+        try:
+            listofboxes=json.loads(inputname) #We can directly type a list of boxes in format '[box1,box2,box3]' instead of passing a text file
+        except:
+            print('Cannot parse this input. Please enter a filepath or comma-separated list of boxes in square brackets')
+    if listofboxes and not listofAPIports: #If we just have a n*1 list we interpret them as box names and use my default naming pattern to guess the port numbers
+        for thisbox in listofboxes:
+            listofsshports.append(thisbox+4000)
+            listofAPIports.append(thisbox+5000)
+            listofwebinterfaceports.append(thisbox+7000)
+    return listofsshports, listofAPIports, listofwebinterfaceports
 
 parser = argparse.ArgumentParser(description='Controls multiple tracking systems.')
 parser.add_argument('--scan',help='Refresh the scan cache',action="store_true")
