@@ -473,12 +473,12 @@ if args.closeports:
             print("No open ports found")
             continue
     for openport in openportlist:
-    try:
-        openport.kill()
-#        print('super')
-    except:
-#        print('ooper!')
-        pass
+        try:
+            openport.kill()
+    #        print('super')
+        except:
+    #        print('ooper!')
+            pass
     openportlist=[]
     pickle.dump(openportlist,open(configpath+'cached_ports.pkl','wb'))
 
