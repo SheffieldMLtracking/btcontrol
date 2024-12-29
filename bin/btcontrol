@@ -467,21 +467,21 @@ if args.rsync is not None: #QUESTION: I don't think rsync will currently work wi
         box.rsync(pwfile,rsynclocal,args.rsync)        
 
 if args.closeports:
-    if not openportlist:
-        try:
-            openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
-        except:
-            print("No open ports found")
-    for thisport in openportlist:
-        try:
-            proc=psutil.Process(thisport)
-        except:
-            pass
-        else:
+    try:
+        openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
+    except:
+    print("No open ports found")
+    else:
+        for thisport in openportlist:
             try:
-                proc.kill()
+                proc=psutil.Process(thisport)
             except:
                 pass
+            else:
+                try:
+                    proc.kill()
+                except:
+                    pass
     openportlist=[]
     pickle.dump(openportlist,open(configpath+'cached_ports.pkl','wb'))
 
