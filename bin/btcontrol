@@ -470,7 +470,7 @@ if args.closeports:
     try:
         openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
     except:
-    print("No open ports found")
+        print("No open ports found")
     else:
         for thisport in openportlist:
             try:
