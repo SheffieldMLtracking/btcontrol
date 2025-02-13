@@ -3,6 +3,7 @@ A tool for controlling multiple tracking systems, rsyncing the data off them, et
 
 # install 
 ```
+pip install python-nmap
 pip install git+https://github.com/SheffieldMLtracking/btcontrol.git
 ```
 
