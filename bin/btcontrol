@@ -226,7 +226,7 @@ def openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,l
         #print(api_url)#
         goodbox=2 #If this doesn't get changed, we have a problem
         try: #Checking for open ports no longer works to determine if box is functioning, since we've just opened the port! Instead, I try an API call and only add box if we get a response from the Pi. Is there a better way to do this?
-            sleep(1)
+            sleep(3)
             response = requests.get(api_url)
         except:
             goodbox=0
