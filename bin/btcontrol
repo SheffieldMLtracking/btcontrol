@@ -377,7 +377,7 @@ for box in boxes:
     try:
         bid.append(box.id)
     except:
-        bid.append(0)
+        bid.append('0')
 sortind=sorted(range(len(bid)), key=lambda k: bid[k])
 boxes=boxes[sortind]
 
