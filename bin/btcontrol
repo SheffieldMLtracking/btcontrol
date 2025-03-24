@@ -462,22 +462,32 @@ if args.expconfig:
     for i,box in enumerate(beeboxes):
         box.configure('exp',i/len(beeboxes),interval)
 
-if args.config is not None:
-    confname=args.config
-    beeboxes = [box for box in boxes if box.beebox]  
-    if confname=='timesync':
-        beeboxes[0].configure('timesyncf',0,2)
-        if len(beeboxes)>1:
-            for box in beeboxes[1:]:
-                box.configure('timesyncr',0,2)
-    else:
-        for i,box in enumerate(beeboxes):
-            box.configure(confname,i/len(beeboxes),2)
         
 for box in boxes:
     box.sessionset(sessionid,setid)
 
-        
+
+if args.config is not None:
+    confname=args.config
+    beeboxes = [box for box in boxes if box.beebox]  
+    if confname=='timesync':
+        print("Reminder: Setting set to 'timesync'.")
+        beeboxes[0].configure('timesyncf',0,2)
+        beeboxes[0].sessionset(sessionid,'timesync_flasher')
+        if len(beeboxes)>1:
+            for box in beeboxes[1:]:
+                box.configure('timesyncr',0,2)
+                box.sessionset(sessionid,'timesync_receiver')
+    elif confname=='cal':
+        print("Reminder: Setting set to 'cal'.")
+        for i,box in enumerate(beeboxes):
+            box.configure(confname,i/len(beeboxes),2)
+            box.sessionset(sessionid,'cal')
+    else:
+        for i,box in enumerate(beeboxes):
+            box.configure(confname,i/len(beeboxes),2)
+
+
 if args.start:
     for box in boxes:
         box.start()
