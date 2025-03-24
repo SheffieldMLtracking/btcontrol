@@ -149,7 +149,7 @@ class Box:
         if deleteflag==1:
             print("Files will be deleted from box after copying")
             cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a --remove-source-files' % (pwfile,self.addr,sourcepath,savepath)
-            self.callapi('deleteemptydirs',True)
+            #self.callapi('deleteemptydirs',True)
         else:
             cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
         print("Running:\n%s\n" % cmd)
