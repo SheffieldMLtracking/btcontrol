@@ -470,8 +470,7 @@ for box in boxes:
 if args.config is not None:
     confname=args.config
     beeboxes = [box for box in boxes if box.beebox] 
-    for box in beeboxes:
-        print(box.id)
+    beeboxes.sort(key= box.id)
     if confname=='timesync':
         print("Reminder: Setting set to 'timesync'.")
         beeboxes[0].configure('timesyncf',0,2)
