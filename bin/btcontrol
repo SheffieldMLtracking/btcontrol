@@ -379,7 +379,7 @@ for box in boxes:
     except:
         bid.append('0')
 sortind=sorted(range(len(bid)), key=lambda k: bid[k])
-boxes=boxes[sortind]
+boxes = [boxes[i] for i in sortind]
 
 if args.serverpw is not None:
     print("Password file for server: %s" % args.serverpw)
