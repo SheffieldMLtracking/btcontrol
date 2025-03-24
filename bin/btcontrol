@@ -372,6 +372,8 @@ else:
         serveraddress = ""        
 pickle.dump(serveraddress,open(configpath+'cached_serveraddress.pkl','wb')) 
 
+boxes.sort(key= lambda box: box.id)
+
 if args.serverpw is not None:
     print("Password file for server: %s" % args.serverpw)
     serverpw = args.serverpw
