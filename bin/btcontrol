@@ -479,7 +479,7 @@ if args.rsync is not None: #QUESTION: I don't think rsync will currently work wi
 if args.rsyncd is not None: #QUESTION: I don't think rsync will currently work with boxes connecting via local ports, because it tries to SSH to each Pi's IP address. I can figure out how to do it across the SSH tunnel instead, but is it worth doing? If we are controlling boxes using AWS then we will also be backing up the data using Joe H's pipeline and won't need to rsync
     os.makedirs(rsynclocal,exist_ok=True)
     for box in boxes:
-        box.rsync(pwfile,rsynclocal,args.rsync, 1)  
+        box.rsync(pwfile,rsynclocal,args.rsyncd, 1)  
 
 if args.closeports:
     try:
