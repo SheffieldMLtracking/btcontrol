@@ -153,7 +153,6 @@ class Box:
         else:
             cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
         print("Running:\n%s\n" % cmd)
-        
         os.system(cmd)
     
 def get_ip():
