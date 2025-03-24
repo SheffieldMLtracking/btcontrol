@@ -491,7 +491,7 @@ if args.config is not None:
     elif confname=='cal':
         print("Reminder: Setting set to 'cal'.")
         for i,box in enumerate(beeboxes):
-            box.configure(confname,i/len(beeboxes),2)
+            box.configure(confname,0,2)
             box.sessionset(sessionid,'cal')
     else:
         for i,box in enumerate(beeboxes):
