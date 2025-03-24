@@ -114,12 +114,18 @@ class Box:
             delay = 100
             flashseq = 9 #No flash
             interval = interval
-        if purpose == 'timesync':
+        if purpose == 'timesyncr':
             exposure = 5000
             predelay = 0
             delay = 0
             flashseq = 9 #No flash
             interval = 0.242
+        if purpose == 'timesyncf':
+            exposure = 5000
+            predelay = 0
+            delay = 0
+            flashseq = 2 #1 at a time
+            interval = 0.5
         print("   configuring box %s" % self.id, ":")
         res = self.callapi('config/exposure/%d' % exposure,True)
         res = self.callapi('config/predelay/%d' % predelay,True)
