@@ -8,18 +8,26 @@ import requests
 import sys
 import os
 from pathlib import Path
+import json
+import csv
+import subprocess
+from time import sleep
+import psutil
 
 class Box:
-    def __init__(self, addr, scandetails = None):
+    def __init__(self, addr, sshport, apiport, webport, scandetails = None):
         """
         addr: IP address
         scandetails: details from nmap scan
         """
         self.addr = addr
+        self.sshport = sshport #Port no for SSH (=22 for boxes on local subnet, but unique to each box for SSH connections). NB I'm not sure if we actually use this at all, but I've included it for completeness
+        self.apiport = apiport #Port no for API (=5000 for boxes on local subnet, but unique to each box for SSH connections)
+        self.webport = webport #Port no for web interface (=8000 for boxes on local subnet, but unique to each box for SSH connections)
         self.scandetails = scandetails
-        self.us = False #is this our own IP address
-        self.p22 = self.scandetails['tcp'][22]['state']
-        self.p5000 = self.scandetails['tcp'][5000]['state']
+        self.us = False #is this our own IP address. QUESTION: this property is to differentiate between our computer and boxes on the network. Now we're adding boxes that ssh to local ports, so in that case the IP address IS our own IP address. However, it looks as though we're setting this False, here. I can't figure out where the check occurs as to whether or not the found item is a box or us?
+        self.p22 = self.scandetails['tcp'][sshport]['state']
+        self.p5000 = self.scandetails['tcp'][apiport]['state']
         self.beebox = (self.p22=='open') and (self.p5000=='open')
         self.lastsuccess = None
         if self.beebox:
@@ -28,7 +36,7 @@ class Box:
         
     def callapi(self,endpointcall,printcall=False):
         if printcall: print(endpointcall)
-        api_url = "http://%s:5000/%s" % (self.addr, endpointcall)
+        api_url = "http://%s:%d/%s" % (self.addr, self.apiport, endpointcall)
         #print(api_url)
         try:
             response = requests.get(api_url)
@@ -56,7 +64,7 @@ class Box:
         if self.lastsuccess==True: status+=" ok "
         if self.lastsuccess==False: status+=" error "
         if self.lastsuccess==None: status+=" - "
-        link = "http://%s:8000" % self.addr if self.beebox else self.addr
+        link = "http://%s:%d" % (self.addr, self.webport) if self.beebox else self.addr #This was meant to correct the link to the web interface for SSH boxes by correcting the port number. Should now work for boxes on local network or port forwarding from remote computer BUT won't work if you're controlling boxes from AWS server over shh.
         print("%30s | %7s | %7s | %15s | %s" % (link,self.p22,self.p5000,notes,status))
         
     def start(self):
@@ -79,7 +87,7 @@ class Box:
         if not self.beebox: return
         self.callapi('setlabel/a%s,%s' % (sessionid,setid))
         
-    def configure(self, purpose, ds=0,interval=0.5):
+    def configure(self, purpose, ds=0,interval=2):
         """Configure the exposure etc to either calibration or experiment mode"""
         if not self.beebox: return
         if purpose == 'cal':
@@ -87,35 +95,64 @@ class Box:
             predelay = 165
             interval = 5
             delay = 100
+            flashseq = 1
         if purpose == 'exp':
             exposure = 90
             predelay = 165
             delay = 100
+            flashseq = 1
             interval = interval
-        print("   configuring box %s" % self.id)
+        if purpose == 'ohio':
+            exposure = 100
+            predelay = 165
+            delay = 100
+            flashseq = 1 #2 at a time
+            interval = interval
+        if purpose == 'noflash':
+            exposure = 150
+            predelay = 165
+            delay = 100
+            flashseq = 9 #No flash
+            interval = interval
+        if purpose == 'timesyncr':
+            exposure = 5000
+            predelay = 0
+            delay = 0
+            flashseq = 9 #No flash
+            interval = 0.242
+        if purpose == 'timesyncf':
+            exposure = 5000
+            predelay = 0
+            delay = 0
+            flashseq = 2 #1 at a time
+            interval = 0.5
+        print("   configuring box %s" % self.id, ":")
         res = self.callapi('config/exposure/%d' % exposure,True)
         res = self.callapi('config/predelay/%d' % predelay,True)
         res = self.callapi('config/delay/%d' % delay,True)
         res = self.callapi('set/trigger/skipnoflashes/5000',True)
         res = self.callapi('set/trigger/t/%0.2f' % interval,True)
         res = self.callapi('set/trigger/ds/%0.2f' % ds,True)
-        res = self.callapi('set/trigger/flashseq/1',True)
-        
+        res = self.callapi('set/trigger/flashseq/%d' % flashseq,True)
+        print("")
         
         if hasattr(res,'content'):
           self.lastsuccess = (res.content==b'...') #just check last one... not sure if it's really done, but hopefully.
         
-    def rsync(self,pwfile,savepath,downloadrestriction=''):
+    def rsync(self,pwfile,savepath,downloadrestriction='',deleteflag=0):
         if not self.beebox: return        
         print("Downloading from box %s" % self.id)
         sourcepath = '/home/pi/beephotos'
         if len(downloadrestriction)>0:
             sourcepath = sourcepath+'/'+downloadrestriction+'/*'
             savepath = savepath + '/'+downloadrestriction
-
-        cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
+        if deleteflag==1:
+            print("Files will be deleted from box after copying")
+            cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a --remove-source-files' % (pwfile,self.addr,sourcepath,savepath)
+            #self.callapi('deleteemptydirs',True)
+        else:
+            cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
         print("Running:\n%s\n" % cmd)
-        
         os.system(cmd)
     
 def get_ip():
@@ -147,16 +184,125 @@ def scan_our_subnet(ouripaddr,boxes = []):
     for addr, details in nm.analyse_nmap_xml_scan()['scan'].items():
         if addr in [box.addr for box in boxes]: 
             continue
-        box = Box(addr, details)
+        box = Box(addr, 22, 5000, 8000, details)
         if ouripaddr==addr: box.us = True
         boxes.append(box)
     return boxes
         
+def addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes = []):
+    """
+    Looks at a list of ports on localhost for bee boxes
+    Pass it a previous list to add to, if new items found
+    """
+    nm = nmap.PortScanner()
+    for sshport, apiport, webport in zip(listofsshports,listofAPIports,listofwebinterfaceports):
+        if apiport in [box.apiport for box in boxes]: #I think this checks that the box is not already in our list so we don't add the same box again? Checks port number rather than IP address because all boxes using SSH connection are on localhost.
+            continue
+        checkports = "%d,%d,%d" % (sshport, apiport, webport)   
+        nm.scan('127.0.0.1',checkports,arguments='-T5') #Checks whether ports are open, so we can only work with boxes that have an SSH connection to our AWS server
+        details=nm.analyse_nmap_xml_scan()['scan']['127.0.0.1']
+        box = Box('127.0.0.1', sshport, apiport, webport, details)
+        boxes.append(box)
+    return boxes
+
+def openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,listofwebinterfaceports,boxes = [], openportlist=[]):
+    """
+    Opens a list of ports on localhost for forwarding to boxes via AWS server
+    Allows us to control list of boxes from a remote computer
+    Calls addlocalportconnections to add the open ports to our list of boxes
+    Pass it a previous list to add to, if new items found
+    """
+    for sshport, apiport, webport in zip(listofsshports,listofAPIports,listofwebinterfaceports):
+        openapi, openport = [], []
+        portstring= '%d:localhost:%d' % (apiport, apiport)
+        openapi = subprocess.Popen(['ssh', '-N', '-L', portstring, serveraddress, '-i', serverpw],
+                            stdin =subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            universal_newlines=True,
+                            bufsize=0)
+        api_url = "http://%s:%d/%s" % ('127.0.0.1', apiport, 'getid')
+        print("Trying ports:", sshport, apiport, webport)#
+        #print(api_url)#
+        goodbox=2 #If this doesn't get changed, we have a problem
+        try: #Checking for open ports no longer works to determine if box is functioning, since we've just opened the port! Instead, I try an API call and only add box if we get a response from the Pi. Is there a better way to do this?
+            sleep(3)
+            response = requests.get(api_url)
+        except:
+            goodbox=0
+        else:
+            goodbox=1
+        #print(goodbox) # 
+        if goodbox==1:
+            print("Port %s: opened successfully" % apiport)
+            openportlist.append(openapi.pid)#save process id for each open port OR:
+            #openportlist.append(apiport)#save port no for each open port
+            for thisport in [sshport, webport]:
+                        portstring= '%d:localhost:%d' % (thisport, thisport)
+                        openport = subprocess.Popen(['ssh', '-N', '-L', portstring, serveraddress, '-i', serverpw],
+                                             stdin =subprocess.PIPE,
+                                             stdout=subprocess.PIPE,
+                                             stderr=subprocess.PIPE,
+                                             universal_newlines=True,
+                                             bufsize=0)
+                        openportlist.append(openport.pid)#save process id for each open port OR:
+                        #openportlist.append(thisport)#save port no for each open port
+        elif goodbox==0:
+            print("Port %s: no reponse" % apiport)
+            openapi.kill()
+        elif goodbox==2:
+            print("Error in function 'openportconnections': goodbox==2?")
+        else:
+            print("Error: something weird going on in function 'openportconnections'")
+        print("")#
+    boxes=addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes)
+    print("Open ports: ", openportlist) #
+    print('Remember to use "btcontrol --closeports" at the end of your session')
+    return boxes, openportlist
+
+def filenametoportlist(inputname):
+    """
+    Takes a string input and tries to parse it as a directory address to a csv or txt file
+    containing a list of ports to try, or as a list of box names from which it tries to reconstruct the port list.
+    """
+    listofboxes=[]
+    listofsshports=[]
+    listofAPIports=[]
+    listofwebinterfaceports=[]
+    if inputname[-4:] == '.txt' or inputname[-4:] == '.csv':
+        with open(inputname, newline='') as csvfile:
+            portlist = csv.reader(csvfile, delimiter=',', quotechar='|')
+            for row in portlist:
+                if len(row)==1:
+                    listofboxes.append(int(row[0]))
+                    boxlistflag=1
+                elif len(row)==3:
+                    listofsshports.append(int(row[0]))
+                    listofAPIports.append(int(row[1]))
+                    listofwebinterfaceports.append(int(row[2]))
+                else:
+                    print('Cannot parse this file, should be n*1 or n*3 list with one row per box')
+                    continue
+    else:
+        try:
+            listofboxes=json.loads(inputname) #We can directly type a list of boxes in format '[box1,box2,box3]' instead of passing a text file
+        except:
+            print('Cannot parse this input. Please enter a filepath or comma-separated list of boxes in square brackets')
+    if listofboxes and not listofAPIports: #If we just have a n*1 list we interpret them as box names and use my default naming pattern to guess the port numbers
+        for thisbox in listofboxes:
+            listofsshports.append(thisbox+4000)
+            listofAPIports.append(thisbox+5000)
+            listofwebinterfaceports.append(thisbox+7000)
+    return listofsshports, listofAPIports, listofwebinterfaceports
 
 parser = argparse.ArgumentParser(description='Controls multiple tracking systems.')
 parser.add_argument('--scan',help='Refresh the scan cache',action="store_true")
+parser.add_argument('--scanports',help='Use inside AWS: Add boxes that connect via ssh to local ports, by scanning a list of port numbers at the provided directory address', type=str,required=False)
+parser.add_argument('--openports',help='Use from remote computer: Add boxes that connect via ssh to AWS server, by opening port forwarding to AWS, from list of port numbers at the provided directory address', type=str,required=False)
+parser.add_argument('--closeports',help='Close all ports to AWs at end of session',action="store_true")
 parser.add_argument('--calconfig',help='Configure exposure, firing rate etc ready for calibration mode',action="store_true")
 parser.add_argument('--expconfig',help='Configure exposure, firing rate etc ready for experiment mode',action="store_true")
+parser.add_argument('--config',help='Configure exposure: type name of preset configuration as argument',type=str,required=False)
 parser.add_argument('--session',help='Set the session id',type=str,required=False)
 parser.add_argument('--set',help='Set the set id',type=str,required=False)
 parser.add_argument('--start',help='Start all boxes',action="store_true")
@@ -164,7 +310,10 @@ parser.add_argument('--stop',help='Start all boxes',action="store_true")
 parser.add_argument('--interval',help='Interval in seconds',type=float,required=False)
 parser.add_argument('--rsynclocal',help='Location of local destination of rsync, e.g. btcontrol --rsynclocal ~/Documents/beedata',type=str,required=False)
 parser.add_argument('--rsync',help='Copy all photos from box to local computer. e.g. btcontrol --rsync --pwfile ~/Documents/Research/rsync_bee/pw.txt',type=str,required=False,nargs='?')
+parser.add_argument('--rsyncd',help='Copy all photos from box to local computer then DELETE original files from box. e.g. btcontrol --rsyncd --pwfile ~/Documents/Research/rsync_bee/pw.txt',type=str,required=False,nargs='?')
 parser.add_argument('--pwfile',help='Configure the path and file containing ssh password.',type=str,required=False)
+parser.add_argument('--serveraddress',help='Configure address to remote server. Not needed if all boxes are on local network.',type=str,required=False)
+parser.add_argument('--serverpw',help='Configure the path and file containing ssh key for remote server.',type=str,required=False)
 parser.add_argument('--reboot',help='Reboot the pi',action="store_true")
 args = parser.parse_args()
 
@@ -175,6 +324,16 @@ if args.interval:
     interval = args.interval
 else:
     interval = 0.5
+
+#Now that there are 3 ways to generate a box list, it's inelegant to deal with a lack of input under each relevant arg, 
+#because we'll generate 3 different messages (and will call sys.exit even though the other arg provides the necessary info to generate a new box list).
+#Instead we check whether there's a box list here and return a single error message if not.
+if not args.scan and not args.scanports and not args.openports:
+    try:
+        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+    except:
+        print("No boxes specified. Use --scan OR --scanports OR --openports")
+        sys.exit(1)
         
 ipaddr = get_ip()
 if args.scan: 
@@ -182,13 +341,72 @@ if args.scan:
     for i in range(3):
         print("Rescanning... %d/3\n" % (i+1))
         boxes = scan_our_subnet(ipaddr,boxes)
+    bid=[]
+    for box in boxes:
+        try:
+            bid.append(box.id)
+        except:
+            bid.append('0')
+    sortind=sorted(range(len(bid)), key=lambda k: bid[k])
+    boxes = [boxes[i] for i in sortind]
     pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
+#else:
+#    try:
+#        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+ #   except:
+#        print("Cache not found, need to scan. Use --scan") #Replaced with message above
+#        sys.exit(1)
+
+#QUESTION: should we cache the lists of ports so that we can subsequently call --scanports with no arguments and rescan the cached list? Would allow us to check again if a box has rebooted, but seems unnecessary since there's no obvious cost to just repassing the original boxlist if you want to do that
+if args.scanports is not None:
+    boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
+    listofsshports, listofAPIports, listofwebinterfaceports = filenametoportlist(args.scanports)
+    boxes =  addlocalportconnections(listofsshports,listofAPIports,listofwebinterfaceports,boxes)  
+    pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
+#else: #QUESTION: I'm following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
+#    try:
+#        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+#    except:
+#        print("Cache not found, need list of boxes. Use --scanports FILE_WITH_PORT_LIST") #Replaced with message above#
+#        sys.exit(1)
+
+if args.serveraddress is not None:
+    print("Setting server address: %s" % args.serveraddress)
+    serveraddress = args.serveraddress
 else:
     try:
-        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+        serveraddress = pickle.load(open(configpath+'cached_serveraddress.pkl','rb'))
     except:
-        print("Cache not found, need to scan. Use --scan")
-        sys.exit(1)
+        serveraddress = ""        
+pickle.dump(serveraddress,open(configpath+'cached_serveraddress.pkl','wb')) 
+
+
+if args.serverpw is not None:
+    print("Password file for server: %s" % args.serverpw)
+    serverpw = args.serverpw
+else:
+    try:
+        serverpw = pickle.load(open(configpath+'cached_serverpw.pkl','rb'))
+    except:
+        serverpw = None      
+pickle.dump(serverpw,open(configpath+'cached_serverpw.pkl','wb'))
+
+if args.openports is not None: #QUESTION: Please check that this command and associated "openportconnections" function are not a Very Bad Idea before I go and start using them!
+    boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
+    try:
+        openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
+    except:
+        openportlist=[]
+    listofsshports, listofAPIports, listofwebinterfaceports = filenametoportlist(args.openports)
+    boxes, openportlist =  openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,listofwebinterfaceports,boxes,openportlist)  
+    pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
+    pickle.dump(openportlist,open(configpath+'cached_ports.pkl','wb'))
+#else: #QUESTION: I'm following --scan and looking for a cache of boxes, but perhaps we should instead cache the list of ports, so that we can recheck the list each time, in case some boxes have connected or disconnected?
+#    try:
+#        boxes = pickle.load(open(configpath+'cached_boxes.pkl','rb'))
+#    except:
+#        print("Cache not found, need list of boxes. Use --openports FILE_WITH_PORT_LIST") #Replaced with message above
+#        sys.exit(1)
 
 if args.session is not None:
     print("Setting new session id: %s" % args.session)
@@ -220,6 +438,7 @@ else:
         rsynclocal = "."        
 pickle.dump(rsynclocal,open(configpath+'cached_rsynclocal.pkl','wb'))    
 
+
 if args.set is not None:
     print("Setting new set id: %s" % args.set)
     setid = args.set
@@ -228,7 +447,7 @@ else:
         setid = pickle.load(open(configpath+'cached_setid.pkl','rb'))
     except:
         print("WARNING: NO SET ID SET, use --set IDOFSET")
-        setid = "unnamed_session"
+        setid = "unnamed_set"
     
 print("SESSION: %s" % sessionid)
 print("SET: %s" % setid)
@@ -251,23 +470,66 @@ if args.expconfig:
     beeboxes = [box for box in boxes if box.beebox]  
     for i,box in enumerate(beeboxes):
         box.configure('exp',i/len(beeboxes),interval)
+
+if args.config is not None:
+    confname=args.config
+    beeboxes = [box for box in boxes if box.beebox] 
+    #beeboxes.sort(key= lambda box: box.id)
+    if confname=='timesync':
+        print("Reminder: Setting set to 'timesync'.")
+        setid='timesync'
+        beeboxes[0].configure('timesyncf',0,2)
+        if len(beeboxes)>1:
+            for box in beeboxes[1:]:
+                box.configure('timesyncr',0,2)
+    elif confname=='cal':
+        print("Reminder: Setting set to 'cal'.")
+        setid='cal'
+        for i,box in enumerate(beeboxes):
+            box.configure(confname,0,2)
+    else:
+        for i,box in enumerate(beeboxes):
+            box.configure(confname,i/len(beeboxes),2)
+
         
 for box in boxes:
     box.sessionset(sessionid,setid)
 
 
-        
 if args.start:
     for box in boxes:
         box.start()
    
-       
 
-if args.rsync is not None:
+if args.rsync is not None: #QUESTION: I don't think rsync will currently work with boxes connecting via local ports, because it tries to SSH to each Pi's IP address. I can figure out how to do it across the SSH tunnel instead, but is it worth doing? If we are controlling boxes using AWS then we will also be backing up the data using Joe H's pipeline and won't need to rsync
     os.makedirs(rsynclocal,exist_ok=True)
     for box in boxes:
-        box.rsync(pwfile,rsynclocal,args.rsync)        
-   
+        box.rsync(pwfile,rsynclocal,args.rsync, 0)  
+
+if args.rsyncd is not None: #QUESTION: I don't think rsync will currently work with boxes connecting via local ports, because it tries to SSH to each Pi's IP address. I can figure out how to do it across the SSH tunnel instead, but is it worth doing? If we are controlling boxes using AWS then we will also be backing up the data using Joe H's pipeline and won't need to rsync
+    os.makedirs(rsynclocal,exist_ok=True)
+    for box in boxes:
+        box.rsync(pwfile,rsynclocal,args.rsyncd, 1)  
+
+if args.closeports:
+    try:
+        openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
+    except:
+        print("No open ports found")
+    else:
+        for thisport in openportlist:
+            try:
+                proc=psutil.Process(thisport)
+            except:
+                pass
+            else:
+                try:
+                    proc.kill()
+                except:
+                    pass
+    openportlist=[]
+    pickle.dump(openportlist,open(configpath+'cached_ports.pkl','wb'))
+
 pickle.dump(sessionid,open(configpath+'cached_sessionid.pkl','wb'))    
 pickle.dump(setid,open(configpath+'cached_setid.pkl','wb'))    
 
@@ -278,5 +540,3 @@ print("                 IP Address    | Port 22 | Port 5k | Comments        | La
 for box in boxes:    
     #if not box.beebox: continue #only will show bee boxes.
     box.display()
-    
-   
