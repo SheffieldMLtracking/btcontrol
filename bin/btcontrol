@@ -341,6 +341,14 @@ if args.scan:
     for i in range(3):
         print("Rescanning... %d/3\n" % (i+1))
         boxes = scan_our_subnet(ipaddr,boxes)
+    bid=[]
+    for box in boxes:
+        try:
+            bid.append(box.id)
+        except:
+            bid.append('0')
+    sortind=sorted(range(len(bid)), key=lambda k: bid[k])
+    boxes = [boxes[i] for i in sortind]
     pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
 #else:
 #    try:
@@ -372,14 +380,6 @@ else:
         serveraddress = ""        
 pickle.dump(serveraddress,open(configpath+'cached_serveraddress.pkl','wb')) 
 
-bid=[]
-for box in boxes:
-    try:
-        bid.append(box.id)
-    except:
-        bid.append('0')
-sortind=sorted(range(len(bid)), key=lambda k: bid[k])
-boxes = [boxes[i] for i in sortind]
 
 if args.serverpw is not None:
     print("Password file for server: %s" % args.serverpw)
