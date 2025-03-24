@@ -133,15 +133,18 @@ class Box:
         if hasattr(res,'content'):
           self.lastsuccess = (res.content==b'...') #just check last one... not sure if it's really done, but hopefully.
         
-    def rsync(self,pwfile,savepath,downloadrestriction=''):
+    def rsync(self,pwfile,savepath,downloadrestriction='',deleteflag=0):
         if not self.beebox: return        
         print("Downloading from box %s" % self.id)
         sourcepath = '/home/pi/beephotos'
         if len(downloadrestriction)>0:
             sourcepath = sourcepath+'/'+downloadrestriction+'/*'
             savepath = savepath + '/'+downloadrestriction
-
-        cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
+        if deleteflag==1:
+            print("Files will be deleted from box after copying")
+            cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a --remove-source-files' % (pwfile,self.addr,sourcepath,savepath)
+        else:
+            cmd = 'rsync --rsh="sshpass -f %s ssh -l pi -o StrictHostKeyChecking=no" -z pi@%s:%s %s -a' % (pwfile,self.addr,sourcepath,savepath)
         print("Running:\n%s\n" % cmd)
         
         os.system(cmd)
@@ -301,6 +304,7 @@ parser.add_argument('--stop',help='Start all boxes',action="store_true")
 parser.add_argument('--interval',help='Interval in seconds',type=float,required=False)
 parser.add_argument('--rsynclocal',help='Location of local destination of rsync, e.g. btcontrol --rsynclocal ~/Documents/beedata',type=str,required=False)
 parser.add_argument('--rsync',help='Copy all photos from box to local computer. e.g. btcontrol --rsync --pwfile ~/Documents/Research/rsync_bee/pw.txt',type=str,required=False,nargs='?')
+parser.add_argument('--rsyncd',help='Copy all photos from box to local computer then DELETE original files from box. e.g. btcontrol --rsyncd --pwfile ~/Documents/Research/rsync_bee/pw.txt',type=str,required=False,nargs='?')
 parser.add_argument('--pwfile',help='Configure the path and file containing ssh password.',type=str,required=False)
 parser.add_argument('--serveraddress',help='Configure address to remote server. Not needed if all boxes are on local network.',type=str,required=False)
 parser.add_argument('--serverpw',help='Configure the path and file containing ssh key for remote server.',type=str,required=False)
@@ -470,7 +474,12 @@ if args.start:
 if args.rsync is not None: #QUESTION: I don't think rsync will currently work with boxes connecting via local ports, because it tries to SSH to each Pi's IP address. I can figure out how to do it across the SSH tunnel instead, but is it worth doing? If we are controlling boxes using AWS then we will also be backing up the data using Joe H's pipeline and won't need to rsync
     os.makedirs(rsynclocal,exist_ok=True)
     for box in boxes:
-        box.rsync(pwfile,rsynclocal,args.rsync)        
+        box.rsync(pwfile,rsynclocal,args.rsync, 0)  
+
+if args.rsyncd is not None: #QUESTION: I don't think rsync will currently work with boxes connecting via local ports, because it tries to SSH to each Pi's IP address. I can figure out how to do it across the SSH tunnel instead, but is it worth doing? If we are controlling boxes using AWS then we will also be backing up the data using Joe H's pipeline and won't need to rsync
+    os.makedirs(rsynclocal,exist_ok=True)
+    for box in boxes:
+        box.rsync(pwfile,rsynclocal,args.rsync, 1)  
 
 if args.closeports:
     try:
