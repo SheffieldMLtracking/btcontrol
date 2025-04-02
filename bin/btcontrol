@@ -107,7 +107,7 @@ class Box:
             predelay = 140
             delay = 100
             flashseq = 1
-            interval = interval
+            interval = 0.5
         if purpose == 'ohio':
             exposure = 100
             predelay = 165
@@ -120,6 +120,12 @@ class Box:
             delay = 100
             flashseq = 9 #No flash
             interval = interval
+        if purpose == 'camview':
+            exposure = 1000
+            predelay = 165
+            interval = 2
+            delay = 100
+            flashseq = 9
         if purpose == 'timesyncr':
             exposure = 250
             predelay = 0
