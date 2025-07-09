@@ -13,6 +13,8 @@ import csv
 import subprocess
 from time import sleep
 import psutil
+import datetime
+#from itertools import compress
 
 class Box:
     def __init__(self, addr, sshport, apiport, webport, scandetails = None):
@@ -93,51 +95,91 @@ class Box:
         if purpose == 'cal':
             exposure = 1000
             predelay = 165
-            interval = 5
+            interval = 3
             delay = 100
             flashseq = 1
-        if purpose == 'exp':
+            savephotos = 1
+            tflag=0
+        if purpose == 'exp_old':
             exposure = 90
             predelay = 165
             delay = 100
             flashseq = 1
             interval = interval
+            savephotos = 0
+            tflag=0
+        if purpose == 'exp':
+            exposure = 50
+            predelay = 140
+            delay = 100
+            flashseq = 1
+            interval = 0.5
+            savephotos = 1
+            tflag=0
         if purpose == 'exp2':
             exposure = 50
             predelay = 140
             delay = 100
             flashseq = 1
             interval = 0.5
+            savephotos = 0
+            tflag=0
         if purpose == 'ohio':
             exposure = 100
-            predelay = 165
+            predelay = 140
             delay = 100
             flashseq = 1 #2 at a time
-            interval = interval
+            interval = 1
+            savephotos = 0
+            tflag=0
         if purpose == 'noflash':
             exposure = 150
             predelay = 165
             delay = 100
             flashseq = 9 #No flash
             interval = interval
+            savephotos = 0
+            tflag=0
         if purpose == 'camview':
             exposure = 1000
             predelay = 165
             interval = 2
             delay = 100
             flashseq = 9
-        if purpose == 'timesyncr':
-            exposure = 250
-            predelay = 0
-            delay = 0
-            flashseq = 9 #No flash
-            interval = 0.242
-        if purpose == 'timesyncf':
+            savephotos = 0
+            tflag=0
+        if purpose == 'timesyncr': #receiver
             exposure = 5000
             predelay = 0
             delay = 0
-            flashseq = 4 #4 at a time
-            interval = 0.3
+            flashseq = 9 #No flash
+            interval = 0.24
+            savephotos = 1
+            tflag=1
+        if purpose == 'timesyncf': #flasher
+            exposure = 5000
+            predelay = 0
+            delay = 0
+            flashseq = 1 #2 at a time
+            interval = 0.5
+            savephotos = 0
+            tflag=1
+        if purpose == 'timesyncr_ohio': #receiver
+            exposure = 5000
+            predelay = 0
+            delay = 0
+            flashseq = 9 #No flash
+            interval = 0.49
+            savephotos = 0
+            tflag=1
+        if purpose == 'timesyncf_ohio': #flasher
+            exposure = 5000
+            predelay = 0
+            delay = 0
+            flashseq = 1 #2 at a time
+            interval = 1
+            savephotos = 0
+            tflag=1
         print("   configuring box %s" % self.id, ":")
         res = self.callapi('config/exposure/%d' % exposure,True)
         res = self.callapi('config/predelay/%d' % predelay,True)
@@ -146,6 +188,9 @@ class Box:
         res = self.callapi('set/trigger/t/%0.2f' % interval,True)
         res = self.callapi('set/trigger/ds/%0.2f' % ds,True)
         res = self.callapi('set/trigger/flashseq/%d' % flashseq,True)
+        res = self.callapi('set/camera/savephotos/%d' % savephotos,True)
+        if tflag==1:
+            res = self.callapi('setdatetime/%s' % datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),True)
         print("")
         
         if hasattr(res,'content'):
@@ -238,8 +283,9 @@ def openportconnections(serveraddress, serverpw, listofsshports,listofAPIports,l
         #print(api_url)#
         goodbox=2 #If this doesn't get changed, we have a problem
         try: #Checking for open ports no longer works to determine if box is functioning, since we've just opened the port! Instead, I try an API call and only add box if we get a response from the Pi. Is there a better way to do this?
-            sleep(3)
+            sleep(4)
             response = requests.get(api_url)
+            goodbox=1
         except:
             goodbox=0
         else:
@@ -353,14 +399,29 @@ if args.scan:
     for i in range(3):
         print("Rescanning... %d/3\n" % (i+1))
         boxes = scan_our_subnet(ipaddr,boxes)
+    #isbox=[False]*len(boxes) #only keep real boxes in boxlist
+    #for boxind,box in enumerate(boxes):
+    #    try:
+    #        box.id
+    #        isbox[boxind]=True
+    #    except:
+    #        pass
+    #    if box.beebox:
+    #        isbox[boxind]=True
+    #    if box.us:
+    #        isbox[boxind]=True
+    ##    if box.p22=='open':
+    ##       isbox[boxind]=True
+    #boxes=list(compress(boxes, isbox))
     bid=[]
-    for box in boxes:
+    for box in boxes: #sort boxlist by ID no
         try:
             bid.append(box.id)
         except:
             bid.append('0')
     sortind=sorted(range(len(bid)), key=lambda k: bid[k])
     boxes = [boxes[i] for i in sortind]
+
     pickle.dump(boxes,open(configpath+'cached_boxes.pkl','wb'))
 #else:
 #    try:
@@ -369,7 +430,6 @@ if args.scan:
 #        print("Cache not found, need to scan. Use --scan") #Replaced with message above
 #        sys.exit(1)
 
-#QUESTION: should we cache the lists of ports so that we can subsequently call --scanports with no arguments and rescan the cached list? Would allow us to check again if a box has rebooted, but seems unnecessary since there's no obvious cost to just repassing the original boxlist if you want to do that
 if args.scanports is not None:
     boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
     listofsshports, listofAPIports, listofwebinterfaceports = filenametoportlist(args.scanports)
@@ -403,8 +463,8 @@ else:
         serverpw = None      
 pickle.dump(serverpw,open(configpath+'cached_serverpw.pkl','wb'))
 
-if args.openports is not None: #QUESTION: Please check that this command and associated "openportconnections" function are not a Very Bad Idea before I go and start using them!
-    boxes = [] #QUESTION: in the scan command, we clear the list of boxes before scanning so we don't end up having boxes on our list that are no longer online. I've done the same here. BUT this means that we can't combine 'scan' and 'scanports'. I can't imagine why we'd ever want to control a list of boxes some of which are on the local network and others connecting by ssh, but if we do, we'll need a way to combine the two methods without overwriting our list of boxes
+if args.openports is not None:
+    boxes = []
     try:
         openportlist = pickle.load(open(configpath+'cached_ports.pkl','rb'))
     except:
@@ -490,10 +550,19 @@ if args.config is not None:
     if confname=='timesync':
         print("Reminder: Setting set to 'timesync'.")
         setid='timesync'
-        beeboxes[0].configure('timesyncf',0,2)
+        flasherind=1
+        beeboxes[flasherind].configure('timesyncf',0,2)
         if len(beeboxes)>1:
-            for box in beeboxes[1:]:
+            for box in beeboxes[:flasherind]+beeboxes[flasherind+1:]:
                 box.configure('timesyncr',0,2)
+    if confname=='timesync_ohio':
+        print("Reminder: Setting set to 'timesync'.")
+        setid='timesync'
+        flasherind=1
+        beeboxes[flasherind].configure('timesyncf_ohio',0,2)
+        if len(beeboxes)>1:
+            for box in beeboxes[:flasherind]+beeboxes[flasherind+1:]:
+                box.configure('timesyncr_ohio',0,2)
     elif confname=='cal':
         print("Reminder: Setting set to 'cal'.")
         setid='cal'
@@ -552,5 +621,3 @@ print("                 IP Address    | Port 22 | Port 5k | Comments        | La
 for box in boxes:    
     #if not box.beebox: continue #only will show bee boxes.
     box.display()
-
-#IGNORE:test 01/04/25
