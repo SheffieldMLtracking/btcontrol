@@ -160,7 +160,7 @@ class Box:
             exposure = 5000
             predelay = 0
             delay = 0
-            flashseq = 1 #2 at a time
+            flashseq = 4 #4 at a time
             interval = 0.5
             savephotos = 0
             tflag=1
@@ -550,19 +550,23 @@ if args.config is not None:
     if confname=='timesync':
         print("Reminder: Setting set to 'timesync'.")
         setid='timesync'
-        flasherind=1
-        beeboxes[flasherind].configure('timesyncf',0,2)
+        flasherind=0
         if len(beeboxes)>1:
             for box in beeboxes[:flasherind]+beeboxes[flasherind+1:]:
+                print("Configuring receiver: %s" % box.id) #Temp for testing
                 box.configure('timesyncr',0,2)
-    if confname=='timesync_ohio':
+        print("Configuring flasher: %s" % beeboxes[flasherind].id) #Temp for testing
+        beeboxes[flasherind].configure('timesyncf',0,2)
+    elif confname=='timesync_ohio':
         print("Reminder: Setting set to 'timesync'.")
         setid='timesync'
-        flasherind=1
-        beeboxes[flasherind].configure('timesyncf_ohio',0,2)
+        flasherind=0
         if len(beeboxes)>1:
             for box in beeboxes[:flasherind]+beeboxes[flasherind+1:]:
+                print("Configuring receiver: %s" % box.id) #Temp for testing
                 box.configure('timesyncr_ohio',0,2)
+        print("Configuring flasher: %s" % beeboxes[flasherind].id) #Temp for testing
+        beeboxes[flasherind].configure('timesyncf_ohio',0,2)
     elif confname=='cal':
         print("Reminder: Setting set to 'cal'.")
         setid='cal'
